@@ -842,6 +842,7 @@ class YTClock {
       try { this.p.playVideo(); } catch (e) {}
       this.phase = 'live'; this.t = 0;
     }
+    if (!this.ccOff && this.st() === 1) { this.ccOff = true; try { this.p.unloadModule('captions'); this.p.unloadModule('cc'); } catch (e) {} }
     let raw = this.raw;
     try { raw = this.p.getCurrentTime() || 0; } catch (e) {}
     // until our seek to 0:00 lands, the player may still report where it was (e.g. the end, on Play again)
@@ -1706,9 +1707,9 @@ function hud(now) {
   }
   $('#hShieldBar').hidden = G.waitMode; $('#hWaits').hidden = !G.waitMode;
   if (G.waitMode) { setText(ui.shieldK, 'sk', 'Waited'); setText($('#hWaits'), 'wt', G.holds + '×'); }
+  else setText(ui.shieldK, 'sk', G.diff.fail || L.W < 560 ? 'Baseline' : 'Baseline · no fail');
   const ph = G.holding && G.holdWord ? `The song is waiting: type “${G.holdWord.text}”` : 'Type the falling word…';
   if (hudCache.ph !== ph) { hudCache.ph = ph; typeIn.placeholder = ph; field.classList.toggle('wait', G.holding); }
-  else setText(ui.shieldK, 'sk', G.diff.fail || L.W < 560 ? 'Baseline' : 'Baseline · no fail');
   const end = (G.clock && G.clock.duration) || (G.lastT + 2);
   ui.prog.style.width = clamp(now / end, 0, 1) * 100 + '%';
 }
