@@ -74,16 +74,14 @@ button { cursor: pointer; touch-action: manipulation; }
 
 /* ---------- Stage ---------- */
 #stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
-#cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: manipulation; }
+#cv { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; display: block; touch-action: manipulation; }
 
-#ytWrap {
-  position: absolute; z-index: 3; top: 10px; right: var(--gutter-r);
-  width: 224px; aspect-ratio: 16 / 9; max-width: 45%;
-  border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: #000;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+/* The YouTube video plays full-bleed behind the playfield; the canvas above it is tinted, not opaque. */
+#ytWrap { position: absolute; z-index: 0; inset: 0; overflow: hidden; background: #000; pointer-events: none; --vw: 100%; --vh: 100%; }
+#ytWrap iframe, #ytWrap > div {
+  position: absolute; border: 0; display: block;
+  width: var(--vw); height: var(--vh); left: calc(50% - var(--vw) / 2); top: calc(50% - var(--vh) / 2);
 }
-#ytWrap iframe, #ytWrap > div { width: 100%; height: 100%; display: block; border: 0; }
-@media (max-width: 640px) { #ytWrap { width: 160px; } }
 #tapChip {
   position: absolute; z-index: 3; top: 10px; right: var(--gutter-r);
   display: flex; gap: 8px; align-items: center; padding: 6px 8px 6px 12px;
@@ -329,6 +327,7 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
               <div class="row"><label><input type="checkbox" id="optGhost" checked> Show next letters in the type bar (Easy and Normal)</label></div>
               <div class="row"><label for="optSfx">Effects</label><input type="range" id="optSfx" min="0" max="1" step="0.05"></div>
               <div class="row"><label for="optMusic">Music</label><input type="range" id="optMusic" min="0" max="1" step="0.05"></div>
+              <div class="row"><label for="optDim">Darken video background</label><input type="range" id="optDim" min="0.2" max="0.9" step="0.05"></div>
               <ul class="controls">
                 <li><kbd>Enter</kbd> / <kbd>Space</kbd> fire the typed word</li>
                 <li><kbd>Esc</kbd> pause</li>
@@ -405,7 +404,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('lyricvolley:' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('lyricvolley:' + k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
 };
-const settings = Object.assign({ diff: 'easy', spaceFires: true, ghost: true, sfx: 0.8, music: 0.85, offset: 0 }, store.get('settings', {}));
+const settings = Object.assign({ diff: 'easy', spaceFires: true, ghost: true, sfx: 0.8, music: 0.85, offset: 0, dim: 0.6 }, store.get('settings', {}));
 const saveSettings = () => store.set('settings', settings);
 
 /* ---------------- difficulty ---------------- */
@@ -802,7 +801,7 @@ class YTClock {
 }
 
 /* ---------------- DOM refs ---------------- */
-const app = $('#app'), cv = $('#cv'), ctx = cv.getContext('2d'), stage = $('#stage');
+const app = $('#app'), cv = $('#cv'), ctx = cv.getContext('2d'), stage = $('#stage'), ytWrapEl = $('#ytWrap');
 const typeIn = $('#typeIn'), field = $('#field'), ghost = $('#ghost');
 const ui = {
   score: $('#hScore'), combo: $('#hCombo'), wpm: $('#hWpm'), acc: $('#hAcc'), shield: $('#hShield'), shieldK: $('#hShieldK'), prog: $('#prog i'),
@@ -867,7 +866,7 @@ function createYTPlayer(id) {
     destroyPlayer(); $('#ytWrap').hidden = false;
     let done = false;
     const tm = setTimeout(() => { if (!done) { done = true; rej(new Error('timeout')); } }, 10000);
-    const vars = { playsinline: 1, rel: 0, modestbranding: 1, controls: 1, disablekb: 1, fs: 0, iv_load_policy: 3 };
+    const vars = { playsinline: 1, rel: 0, modestbranding: 1, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, cc_load_policy: 0 };
     if (location.origin && location.origin !== 'null') vars.origin = location.origin;
     const p = new YT.Player('ytPlayer', {
       videoId: id, width: '100%', height: '100%', playerVars: vars,
@@ -1348,9 +1347,15 @@ function layout() {
   }
   L.fs = Math.round(clamp(W / 24, 17, 28));
   ctx.font = `700 ${L.fs}px ${MONO}`; L.cw = ctx.measureText('M').width;
-  const narrow = W < 640, ytShown = !$('#ytWrap').hidden && G.state !== 'menu';
   const tapShown = !$('#tapChip').hidden;
-  L.stripY = (narrow && (ytShown || tapShown)) ? (ytShown ? 104 : 58) : 26;
+  L.stripY = (W < 640 && tapShown) ? 58 : 26;
+  L.video = !ytWrapEl.hidden && G.state !== 'menu';
+  if (L.vidW !== W || L.vidH !== H) {
+    // cover the stage with a 16:9 frame, a little oversized so the player chrome sits off-screen
+    L.vidW = W; L.vidH = H;
+    const vw = Math.max(W, H * 16 / 9) * 1.08, vh = Math.max(H, W * 9 / 16) * 1.08;
+    ytWrapEl.style.setProperty('--vw', Math.round(vw) + 'px'); ytWrapEl.style.setProperty('--vh', Math.round(vh) + 'px');
+  }
   const stripSize = Math.round(clamp(W / 42, 14, 20));
   L.topY = L.stripY + stripSize * 1.75 + L.fs * 0.5 + 18;
   L.baseY = H - Math.max(26, H * 0.05);
@@ -1367,7 +1372,14 @@ function draw(now) {
   const { W, H, dpr } = L;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // ground
-  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#0a1024'); g.addColorStop(1, '#111a3a');
+  ctx.clearRect(0, 0, W, H);
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  if (L.video) {
+    // let the video through, darker at the top (lyric strip) and bottom (baseline) where text sits
+    const d = settings.dim;
+    g.addColorStop(0, `rgba(10,16,36,${Math.min(0.95, d + 0.25)})`); g.addColorStop(0.18, `rgba(10,16,36,${d})`);
+    g.addColorStop(0.7, `rgba(10,16,36,${d})`); g.addColorStop(1, `rgba(17,26,58,${Math.min(0.95, d + 0.3)})`);
+  } else { g.addColorStop(0, '#0a1024'); g.addColorStop(1, '#111a3a'); }
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   const glow = ctx.createRadialGradient(L.tx, L.baseY, 0, L.tx, L.baseY, Math.max(W, H) * 0.7);
   glow.addColorStop(0, `rgba(255,140,30,${0.10 + G.pulse * 0.08 + G.muzzle * 0.06})`); glow.addColorStop(1, 'rgba(255,140,30,0)');
@@ -1479,6 +1491,7 @@ function draw(now) {
 
   // countdown / get ready
   if (G.state === 'play' || G.state === 'paused') {
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     if (now < 0 && now > -3.99) {
       const c = Math.ceil(-now), f = -now - Math.floor(-now);
       ctx.globalAlpha = clamp(f * 1.5, 0, 1);
@@ -1660,7 +1673,8 @@ function renderDiffs() {
 }
 renderDiffs();
 $('#optSpace').checked = settings.spaceFires; $('#optGhost').checked = settings.ghost;
-$('#optSfx').value = settings.sfx; $('#optMusic').value = settings.music;
+$('#optSfx').value = settings.sfx; $('#optMusic').value = settings.music; $('#optDim').value = settings.dim;
+$('#optDim').addEventListener('input', (e) => { settings.dim = +e.target.value; saveSettings(); });
 $('#offIn').value = clamp(settings.offset, -3, 3); $('#offOut').textContent = fmtOff(settings.offset);
 $('#optSpace').addEventListener('change', (e) => { settings.spaceFires = e.target.checked; saveSettings(); });
 $('#optGhost').addEventListener('change', (e) => { settings.ghost = e.target.checked; saveSettings(); });
