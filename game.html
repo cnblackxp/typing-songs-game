@@ -402,8 +402,8 @@ const saveSettings = () => store.set('settings', settings);
 
 /* ---------------- difficulty ---------------- */
 const DIFFS = {
-  easy:   { name: 'Easy',   wpm: 30,  fall: 5.8, minLen: 3, win: 0.6,  dmg: 6,  fail: false, norm: 'loose', ghost: true,
-            desc: 'Slow fall, about 30 WPM. Short words are skipped, case and punctuation are ignored, and you can’t fail.' },
+  easy:   { name: 'Easy',   wpm: 30,  fall: 5.8, minLen: 3, skipFiller: true, win: 0.6,  dmg: 6,  fail: false, norm: 'loose', ghost: true,
+            desc: 'Slow fall, about 30 WPM. Short and filler words are skipped, case and punctuation are ignored, and you can’t fail.' },
   normal: { name: 'Normal', wpm: 45,  fall: 4.5, minLen: 2, win: 0.45, dmg: 9,  fail: false, norm: 'loose', ghost: true,
             desc: 'About 45 WPM. Case and punctuation still ignored. No fail, but misses cost you grade.' },
   hard:   { name: 'Hard',   wpm: 66,  fall: 3.5, minLen: 1, win: 0.35, dmg: 12, fail: true,  norm: 'apos',  ghost: false,
@@ -775,22 +775,54 @@ class TapClock {
   get ended() { return false; }
 }
 class YTClock {
-  constructor(p) { this.p = p; this.t = 0; this.pt = performance.now(); this.raw = -1; }
+  constructor(p) { this.p = p; this.t = 0; this.raw = 0; this.rawAt = performance.now(); this.phase = 'live'; this.pausedAt = null; }
   get duration() { try { return this.p.getDuration() || 0; } catch (e) { return 0; } }
-  start() { try { this.p.seekTo(0, true); this.p.unMute(); this.p.setVolume(Math.round(settings.music * 100)); this.p.playVideo(); } catch (e) {} this.t = 0; this.pt = performance.now(); }
-  time() {
-    const now = performance.now(); let raw = this.t, st = -1;
-    try { raw = this.p.getCurrentTime() || 0; st = this.p.getPlayerState(); } catch (e) {}
-    const playing = st === 1, dt = (now - this.pt) / 1000; this.pt = now;
-    if (playing) this.t += dt;
-    if (raw !== this.raw) { this.raw = raw; const d = raw - this.t; if (!playing || Math.abs(d) > 0.35) this.t = raw; else this.t += d * 0.2; }
-    else if (!playing) this.t = raw;
-    return this.t;
+  st() { try { return this.p.getPlayerState(); } catch (e) { return -1; } }
+  // lead: seconds to hold the video at 0:00 so the first words have time to fall
+  start(lead) {
+    const p = this.p; this.lead = Math.max(0, lead || 0); this.t = -this.lead; this.seeking = true;
+    try { p.setVolume(Math.round(settings.music * 100)); p.seekTo(0, true); } catch (e) {}
+    if (this.lead > 0) {
+      // play muted straight from the Start tap (that unlocks playback on phones), then pause for the countdown
+      try { p.mute(); } catch (e) {}
+      this.phase = 'arming'; this.armAt = performance.now();
+    } else { try { p.unMute(); } catch (e) {} this.phase = 'live'; }
+    try { p.playVideo(); } catch (e) {}
   }
-  pause() { try { this.p.pauseVideo(); } catch (e) {} }
-  resume() { try { this.p.playVideo(); } catch (e) {} }
-  stop() { try { this.p.pauseVideo(); } catch (e) {} }
-  get ended() { try { return this.p.getPlayerState() === 0; } catch (e) { return false; } }
+  time() {
+    const now = performance.now();
+    if (this.phase === 'arming') {
+      if (this.st() === 1 || now - this.armAt > 5000) {
+        try { this.p.pauseVideo(); this.p.seekTo(0, true); this.p.unMute(); } catch (e) {}
+        this.phase = 'lead'; this.leadEnd = now + this.lead * 1000;
+      }
+      return -this.lead;
+    }
+    if (this.phase === 'lead') {
+      const r = (this.leadEnd - (this.pausedAt ?? now)) / 1000;
+      if (r > 0) return -r;
+      try { this.p.playVideo(); } catch (e) {}
+      this.phase = 'live'; this.t = 0;
+    }
+    let raw = this.raw;
+    try { raw = this.p.getCurrentTime() || 0; } catch (e) {}
+    // until our seek to 0:00 lands, the player may still report where it was (e.g. the end, on Play again)
+    if (this.seeking) { if (raw < 1.5) this.seeking = false; else return Math.max(0, this.t); }
+    const playing = this.st() === 1;
+    if (raw !== this.raw) { this.raw = raw; this.rawAt = now; }
+    // the player reports a fresh time every frame; only bridge short gaps, so a stall or an ad makes the game wait
+    let est = this.raw + (playing ? Math.min((now - this.rawAt) / 1000, 0.25) : 0);
+    if (playing && est < this.t && this.t - est < 0.12) est = this.t; // no tiny backward steps
+    this.t = est;
+    return est;
+  }
+  pause() { if (this.phase === 'live') { try { this.p.pauseVideo(); } catch (e) {} } else this.pausedAt = performance.now(); }
+  resume() {
+    if (this.phase === 'live') { try { this.p.playVideo(); } catch (e) {} return; }
+    if (this.pausedAt != null) { if (this.phase === 'lead') this.leadEnd += performance.now() - this.pausedAt; this.pausedAt = null; }
+  }
+  stop() { try { this.p.pauseVideo(); this.p.unMute(); } catch (e) {} this.phase = 'live'; }
+  get ended() { return this.phase === 'live' && this.st() === 0; }
 }
 
 /* ---------------- DOM refs ---------------- */
@@ -870,8 +902,10 @@ function createYTPlayer(id) {
     });
   }));
 }
+let ytLateError = null;
 function onYTRuntimeError(code) {
   if (source.kind !== 'youtube') return;
+  if (source.loading) { ytLateError = code; return; } // loadYouTube reports it when it finishes
   source.embedOk = false;
   if (G.state === 'play' || G.state === 'paused') quitToMenu();
   destroyPlayer();
@@ -924,6 +958,7 @@ async function loadYouTube(url) {
   if (!id) { setStatus('bad', 'That doesn’t look like a YouTube link. Paste one like <code>youtube.com/watch?v=…</code> or <code>youtu.be/…</code>.'); return; }
   const token = ++loadToken;
   source = { kind: 'youtube', id, title: 'YouTube video', artist: '', embedOk: false, loading: true };
+  ytLateError = null; ui.lyrics.value = '';
   setChips(); refreshStart();
   $('#ytLoad').disabled = true;
   setStatus('busy', 'Loading the video and searching for synced lyrics…');
@@ -937,13 +972,16 @@ async function loadYouTube(url) {
   if (pr.p) { try { const vd = pr.p.getVideoData(); title = title || vd.title || ''; author = author || vd.author || ''; duration = pr.p.getDuration() || 0; } catch (e) {} }
   else destroyPlayer();
   const nice = title ? splitTitle(title, author) : null;
-  source = { kind: 'youtube', id, title: (nice && nice.track) || title || 'YouTube video', artist: (nice && nice.artist) || author, embedOk: !!pr.p, duration };
+  source = { kind: 'youtube', id, title: (nice && nice.track) || title || 'YouTube video', artist: (nice && nice.artist) || author, embedOk: !!pr.p, duration, loading: true };
   $('#tapLink').href = watch;
   let lyr = null, lookupBlocked = false;
   if (title) { try { lyr = await findLyrics(title, author, duration); } catch (e) { lookupBlocked = true; } }
   else lookupBlocked = !meta;
   if (token !== loadToken) return;
   $('#ytLoad').disabled = false;
+  source.loading = false;
+  const errCode = ytLateError || (pr.err && /^yt\d+/.test(pr.err.message) ? pr.err.message.slice(2) : null);
+  if (ytLateError) { source.embedOk = false; destroyPlayer(); }
   const t = esc(source.title);
   const link = `<a href="${watch}" target="_blank" rel="noopener">open the video ↗</a>`;
   let msg = '', tone = 'ok';
@@ -962,13 +1000,13 @@ async function loadYouTube(url) {
       : `No synced lyrics found for <strong>${t}</strong>. Paste the transcript below (on YouTube: … → Show transcript).`;
     ui.lyricsBox.open = true;
   }
-  if (pr.p) msg = `<strong>${t}</strong> is ready. ` + msg;
+  if (source.embedOk) msg = `<strong>${t}</strong> is ready. ` + msg;
   else {
     tone = 'warn';
     const full = ON_FULL_SITE ? '' : `<a href="${FULL_URL}?v=${esc(id)}" target="_blank" rel="noopener"><strong>Play it in the full version ↗</strong></a> to get the video and lyrics inside the game. Or stay here with `;
     msg = full
       ? full + `<strong>tap sync</strong>: ${link} in another tab, press Start, and press play there when the countdown hits zero. ` + msg
-      : `This video can’t play inside the game, so it uses <strong>tap sync</strong>: ${link} in another tab, press Start, and press play there when the countdown hits zero. ` + msg;
+      : `This video can’t play inside the game${errCode ? ` (YouTube error ${esc(errCode)}: its owner may block embedding)` : ''}, so it uses <strong>tap sync</strong>: ${link} in another tab, press Start, and press play there when the countdown hits zero. ` + msg;
   }
   setStatus(tone, msg);
   refreshStart();
@@ -1008,19 +1046,29 @@ function songData() {
 }
 function safeDur() { try { return ytPlayer.getDuration() || 0; } catch (e) { return 0; } }
 
+// Picks which sung words fall. A typing budget fills at the difficulty's WPM and can hold one fall's worth
+// of typing, so short bursts are fine; every lyric line still gets at least one word when it can.
+const FILLER = new Set(['the', 'and', 'but', 'for', 'are', 'was', 'its', 'with', 'that', 'from', 'than', 'then']);
 function selectTargets(lines, d) {
-  const cps = (d.wpm * 5) / 60;
-  const out = []; let lastT = -1e9, lastLen = 0;
-  lines.forEach((l, li) => l.words.forEach((w) => {
-    const n = norm(w.text, d.norm);
-    if (n.length < d.minLen && !(d.minLen > 1 && n.length >= 1 && l.words.length === 1)) return;
-    if (!n.length) return;
-    if (w.t - lastT < (lastLen + 1) / cps) return;
-    w.target = true;
-    out.push({ text: w.text, norm: n, t: w.t, line: li, len: w.text.length });
-    lastT = w.t; lastLen = n.length;
-  }));
-  return out;
+  const cps = (d.wpm * 5) / 60, cap = d.wpm > 200 ? Infinity : cps * d.fall;
+  const out = []; let debt = 0, clockT = -1e9;
+  const drain = (t) => { debt = Math.max(0, debt - (t - clockT) * cps); clockT = Math.max(clockT, t); };
+  const take = (w, n, li) => { w.target = true; out.push({ text: w.text, norm: n, t: w.t, line: li, len: w.text.length }); debt += n.length + 1; };
+  lines.forEach((l, li) => {
+    const cands = l.words.map((w) => ({ w, n: norm(w.text, d.norm) })).filter((c) => c.n.length);
+    let picked = 0;
+    for (const c of cands) {
+      if (c.n.length < d.minLen || (d.skipFiller && FILLER.has(c.n))) continue;
+      drain(c.w.t);
+      if (debt + c.n.length + 1 <= cap) { take(c.w, c.n, li); picked++; }
+    }
+    if (!picked && cands.length) {
+      const c = cands.reduce((a, b) => (b.n.length > a.n.length ? b : a));
+      drain(c.w.t);
+      if (debt + c.n.length + 1 <= cap * 1.6) take(c.w, c.n, li);
+    }
+  });
+  return out.sort((a, b) => a.t - b.t);
 }
 
 function resetRun() {
@@ -1058,7 +1106,7 @@ function startGame() {
   } else if (source.kind === 'file') {
     G.clock = new BufferClock(source.buffer); G.clock.start(preroll);
   } else if (source.embedOk && ytPlayer) {
-    G.clock = new YTClock(ytPlayer); G.clock.start();
+    G.clock = new YTClock(ytPlayer); G.clock.start(Math.max(0, d.fall - G.firstT + 0.8));
   } else {
     G.clock = new TapClock(); G.clock.start(3.5);
     $('#tapOff').textContent = fmtOff(settings.offset);
@@ -1693,11 +1741,12 @@ $('#fileIn').addEventListener('change', async (e) => {
     const ab = await f.arrayBuffer();
     const buf = await new Promise((res, rej) => { const p = ac.decodeAudioData(ab, res, rej); if (p && p.then) p.then(res, rej); });
     if (token !== loadToken) return;
-    source = { kind: 'file', title, id: f.name, buffer: buf, duration: buf.duration }; refreshStart();
+    source = { kind: 'file', title, id: f.name, buffer: buf, duration: buf.duration, loading: true }; ui.lyrics.value = ''; refreshStart();
     setStatus('busy', `<strong>${esc(title)}</strong> loaded (${Math.round(buf.duration)}s). Searching for synced lyrics…`);
     let lyr = null, blocked = false;
     try { lyr = await findLyrics(title, '', buf.duration); } catch (er) { blocked = true; }
     if (token !== loadToken) return;
+    source.loading = false; refreshStart();
     if (lyr) {
       ui.lyrics.value = lyr.syncedLyrics || lyr.plainLyrics;
       setStatus(lyr.syncedLyrics ? 'ok' : 'warn', `<strong>${esc(title)}</strong> is ready. Lyrics found: ${esc(lyr.trackName)} by ${esc(lyr.artistName)}${lyr.syncedLyrics ? '' : ', without timing'}. Check them under Lyrics &amp; timing.`);
