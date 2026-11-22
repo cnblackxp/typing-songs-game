@@ -99,6 +99,8 @@ button { cursor: pointer; touch-action: manipulation; }
   background: var(--ink); border: 2px solid var(--line); transition: border-color .12s, box-shadow .12s;
 }
 .field.lock { border-color: var(--ember); box-shadow: 0 0 0 4px rgba(255, 176, 46, 0.12); }
+.field.wait:not(.lock):not(.bad) { border-color: var(--ember); animation: waitpulse 0.9s ease-in-out infinite alternate; }
+@keyframes waitpulse { to { box-shadow: 0 0 0 5px rgba(255, 176, 46, 0.18); } }
 .field.bad { border-color: var(--rose); box-shadow: 0 0 0 4px rgba(255, 77, 109, 0.14); }
 .field.shake { animation: shake .22s; }
 @keyframes shake { 20% { transform: translateX(-6px); } 50% { transform: translateX(5px); } 80% { transform: translateX(-3px); } }
@@ -195,6 +197,11 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
 .diff b { font: 700 14px var(--f-display); }
 .diff small { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .diff[aria-checked="true"] { border-color: var(--ember); background: rgba(255, 176, 46, 0.08); }
+.seg-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; font-size: 13.5px; font-weight: 700; color: #cfd4e8; }
+.seg-row small { color: var(--muted); font-weight: 600; }
+.seg { display: inline-flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--ink); border: 1px solid var(--line); }
+.seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 8px; font-weight: 800; font-size: 13px; color: var(--muted); }
+.seg button[aria-checked="true"] { background: var(--ink-3); color: var(--ember); }
 .diff[aria-checked="true"] b { color: var(--ember); }
 .start {
   width: 100%; min-height: 62px; border: 0; border-radius: 16px; background: var(--ember); color: var(--ink);
@@ -243,7 +250,7 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
 
 #app[data-state="menu"] #hud, #app[data-state="menu"] #typeBar,
 #app[data-state="results"] #typeBar, #app[data-state="results"] #pauseBtn { display: none; }
-@media (prefers-reduced-motion: reduce) { .field.shake { animation: none; } .status[data-tone="busy"]::before { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .field.shake, .field.wait { animation: none; } .status[data-tone="busy"]::before { animation: none; } }
 </style>
 
 <div id="app" data-state="menu">
@@ -253,7 +260,7 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
       <div class="stat"><span class="k">Combo</span><span class="v" id="hCombo">0</span></div>
       <div class="stat"><span class="k">WPM</span><span class="v" id="hWpm">–</span></div>
       <div class="stat acc"><span class="k">Accuracy</span><span class="v" id="hAcc">–</span></div>
-      <div class="stat shield"><span class="k" id="hShieldK">Baseline</span><div class="shieldbar"><i id="hShield"></i></div></div>
+      <div class="stat shield"><span class="k" id="hShieldK">Baseline</span><div class="shieldbar" id="hShieldBar"><i id="hShield"></i></div><span class="v" id="hWaits" hidden>0</span></div>
       <div class="hud-spacer"></div>
       <button class="iconbtn" id="pauseBtn" type="button" aria-label="Pause"><svg viewBox="0 0 16 16"><rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/></svg></button>
     </div>
@@ -274,11 +281,11 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
       <div class="menu-inner">
         <div class="brand">
           <h1 class="logo">Lyric<b>Volley</b></h1>
-          <p class="tag">A typing trainer that fights back. Lyrics fall in time with the song. Type a word, fire it, and watch it blow apart on the beat.</p>
+          <p class="tag">A typing trainer that fights back. Type the song’s lyrics as they fall, fire each word, and watch it blow apart on the beat.</p>
           <ol class="steps">
-            <li>Read the word dropping toward the baseline.</li>
-            <li>Type it. The target lights up as each letter lands.</li>
-            <li><span>Press <kbd>Enter</kbd> or <kbd>Space</kbd> to fire. Hit it on the stave line for an on-beat bonus.</span></li>
+            <li>Each lyric line drops as a row of words while it’s sung.</li>
+            <li>Type a word. It lights up as your letters land.</li>
+            <li><span>Press <kbd>Enter</kbd> or <kbd>Space</kbd> to fire. Shoot a word as it’s sung for an on-beat bonus.</span></li>
           </ol>
         </div>
 
@@ -309,6 +316,8 @@ input[type="checkbox"] { accent-color: var(--ember); width: 18px; height: 18px; 
             <h2 class="label" id="diffH">Difficulty</h2>
             <div class="diffs" role="radiogroup" aria-labelledby="diffH" id="diffs"></div>
             <p class="hint" id="diffDesc"></p>
+            <div class="seg-row"><span id="wordsL">Words</span><div class="seg" role="radiogroup" aria-labelledby="wordsL" id="segWords"></div></div>
+            <div class="seg-row"><span id="speedL">Song speed <small>(YouTube and demo)</small></span><div class="seg" role="radiogroup" aria-labelledby="speedL" id="segSpeed"></div></div>
           </section>
 
           <button class="start" id="startBtn" type="button">Start<small id="startSub">Easy · Neon Rain</small></button>
@@ -397,20 +406,22 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('lyricvolley:' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('lyricvolley:' + k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
 };
-const settings = Object.assign({ diff: 'easy', spaceFires: true, ghost: true, sfx: 0.8, music: 0.85, offset: 0, dim: 0.6 }, store.get('settings', {}));
+const settings = Object.assign({ diff: 'easy', spaceFires: true, ghost: true, sfx: 0.8, music: 0.85, offset: 0, dim: 0.6, words: 'all', speed: 1 }, store.get('settings', {}));
 const saveSettings = () => store.set('settings', settings);
 
 /* ---------------- difficulty ---------------- */
 const DIFFS = {
-  easy:   { name: 'Easy',   wpm: 30,  fall: 5.8, minLen: 3, skipFiller: true, win: 0.6,  dmg: 6,  fail: false, norm: 'loose', ghost: true,
-            desc: 'Slow fall, about 30 WPM. Short and filler words are skipped, case and punctuation are ignored, and you can’t fail.' },
-  normal: { name: 'Normal', wpm: 45,  fall: 4.5, minLen: 2, win: 0.45, dmg: 9,  fail: false, norm: 'loose', ghost: true,
-            desc: 'About 45 WPM. Case and punctuation still ignored. No fail, but misses cost you grade.' },
-  hard:   { name: 'Hard',   wpm: 66,  fall: 3.5, minLen: 1, win: 0.35, dmg: 12, fail: true,  norm: 'apos',  ghost: false,
-            desc: 'About 66 WPM, every short word included. Apostrophes count. Let the baseline break and the run ends.' },
-  expert: { name: 'Expert', wpm: 999, fall: 2.8, minLen: 1, win: 0.25, dmg: 15, fail: true,  norm: 'exact', ghost: false,
-            desc: 'Every word the singer sings, at full speed. Capitals, apostrophes and hyphens must match exactly.' },
+  easy:   { name: 'Easy',   wpm: 30,  fall: 8,   minLen: 3, skipFiller: true, win: 0.6,  dmg: 6,  fail: false, wait: true,  norm: 'loose', ghost: true,
+            tag: '8s fall · song waits', desc: 'Words fall slowly. If one reaches the baseline, the music pauses until you clear it, so you can type every line at your own pace. Capitals and punctuation are ignored.' },
+  normal: { name: 'Normal', wpm: 45,  fall: 6,   minLen: 2, win: 0.45, dmg: 9,  fail: false, wait: true,  norm: 'loose', ghost: true,
+            tag: '6s fall · song waits', desc: 'A quicker fall, and the music still waits when you fall behind. Capitals and punctuation are ignored.' },
+  hard:   { name: 'Hard',   wpm: 66,  fall: 4.5, minLen: 1, win: 0.35, dmg: 12, fail: true,  wait: false, norm: 'apos',  ghost: false,
+            tag: '4.5s fall · no waiting', desc: 'The song keeps going. Words that reach the baseline crack it, and a broken baseline ends the run. Apostrophes count.' },
+  expert: { name: 'Expert', wpm: 999, fall: 3.2, minLen: 1, win: 0.25, dmg: 15, fail: true,  wait: false, norm: 'exact', ghost: false,
+            tag: '3.2s fall · exact', desc: 'No waiting and a fast fall. Capitals, apostrophes and hyphens must match exactly.' },
 };
+const WORD_MODES = [['all', 'All lyrics'], ['key', 'Key words']];
+const SPEEDS = [[1, '100%'], [0.75, '75%'], [0.5, '50%']];
 
 /* ---------------- text normalisation ---------------- */
 function norm(s, mode) {
@@ -719,54 +730,74 @@ const AE = {
     const base = 69 + Math.min(level, 4) * 2;
     [0, 4, 7, 12].forEach((iv, i) => this.tone({ type: 'square', f0: this.mf(base + iv), dur: 0.16, gain: 0.035, at: i * 0.06, filter: 4000 }));
   },
+  tapeStop() {
+    if (!this.ok()) return;
+    this.tone({ type: 'sawtooth', f0: 320, f1: 45, dur: 0.5, gain: 0.07, filter: 1400 });
+    this.hiss({ type: 'lowpass', f0: 900, f1: 120, dur: 0.35, gain: 0.06 });
+  },
+  tapeStart() { if (this.ok()) this.tone({ type: 'triangle', f0: 330, f1: 990, dur: 0.2, gain: 0.06 }); },
   count(final) { if (this.ok()) this.tone({ type: 'triangle', f0: final ? 1320 : 660, dur: final ? 0.4 : 0.15, gain: 0.12 }); },
   click() { if (this.ok()) this.tone({ type: 'triangle', f0: 900, dur: 0.04, gain: 0.04 }); },
 };
 
 /* ---------------- clocks ---------------- */
+// Every clock can pause just the music (the song waiting for the player, or the pause menu);
+// sound effects keep running because the AudioContext itself is never suspended.
 class BufferClock {
-  constructor(buf) { this.buf = buf; this.duration = buf.duration; }
-  start(preroll) {
-    const c = AE.ctx; this.stop();
-    this.src = c.createBufferSource(); this.src.buffer = this.buf; this.src.connect(AE.music);
-    this.t0 = c.currentTime + preroll; this.src.start(this.t0); this.dead = false;
+  constructor(buf) { this.buf = buf; this.duration = buf.duration; this.paused = true; this.pv = 0; this.canWait = true; }
+  start(preroll) { this.stop(); this.pv = -preroll; this.resume(); }
+  time() { return this.paused ? this.pv : AE.ctx.currentTime - this.t0; }
+  resume() {
+    if (!this.paused) return;
+    const c = AE.ctx; this.paused = false; this.t0 = c.currentTime - this.pv;
+    const off = Math.max(0, this.pv); if (off >= this.duration) return;
+    const g = c.createGain(); g.connect(AE.music);
+    const src = c.createBufferSource(); src.buffer = this.buf; src.connect(g);
+    src.start(Math.max(c.currentTime, this.t0), off);
+    this.src = src; this.g = g;
   }
-  time() { return AE.ctx.currentTime - this.t0; }
-  pause() { AE.userPaused = true; AE.ctx.suspend().catch(() => {}); }
-  resume() { AE.userPaused = false; AE.ctx.resume().catch(() => {}); }
-  stop() { if (this.src) { try { this.src.stop(); } catch (e) {} this.src.disconnect(); this.src = null; } if (AE.userPaused) this.resume(); }
+  pause() { if (this.paused) return; this.pv = this.time(); this.paused = true; this.kill(); }
+  kill() {
+    if (!this.src) return;
+    const c = AE.ctx, src = this.src, g = this.g;
+    g.gain.setTargetAtTime(0, c.currentTime, 0.02); try { src.stop(c.currentTime + 0.12); } catch (e) {}
+    setTimeout(() => g.disconnect(), 300); this.src = null;
+  }
+  stop() { this.kill(); this.paused = true; }
   get ended() { return this.time() >= this.duration; }
 }
 class SeqClock {
-  constructor() { this.duration = DEMO.duration; }
-  start(preroll) {
-    const c = AE.ctx; this.stop();
-    this.bus = c.createGain(); this.bus.connect(AE.music);
-    this.syn = makeDemoSynth(c, this.bus, AE.noise);
-    this.t0 = c.currentTime + preroll; this.i = 0;
-    this.timer = setInterval(() => this.pump(), 30); this.pump();
-  }
+  constructor(rate = 1) { this.duration = DEMO.duration; this.rate = rate; this.paused = true; this.pv = 0; this.canWait = true; }
+  vnow() { return this.vt0 + (AE.ctx.currentTime - this.t0) * this.rate; }
+  start(preroll) { this.stop(); this.pv = -preroll; this.resume(); this.timer = setInterval(() => this.pump(), 30); }
   pump() {
-    if (!this.syn) return;
-    const c = AE.ctx, horizon = c.currentTime - this.t0 + 0.25;
+    if (this.paused || !this.syn) return;
+    const c = AE.ctx, horizon = this.vnow() + 0.25 * this.rate;
     while (this.i < DEMO_EVENTS.length && DEMO_EVENTS[this.i].t < horizon) {
-      const e = DEMO_EVENTS[this.i++], at = this.t0 + e.t;
+      const e = DEMO_EVENTS[this.i++], at = this.t0 + (e.t - this.vt0) / this.rate;
       if (at < c.currentTime - 0.03) continue;
       this.syn[e.k](at, ...e.a);
     }
   }
-  time() { this.pump(); return AE.ctx.currentTime - this.t0; }
-  pause() { AE.userPaused = true; AE.ctx.suspend().catch(() => {}); }
-  resume() { AE.userPaused = false; AE.ctx.resume().catch(() => {}); }
-  stop() {
-    clearInterval(this.timer); this.syn = null;
-    if (this.bus) { const b = this.bus, c = AE.ctx; b.gain.setTargetAtTime(0, c.currentTime, 0.04); setTimeout(() => b.disconnect(), 300); this.bus = null; }
-    if (AE.userPaused) this.resume();
+  time() { if (this.paused) return this.pv; this.pump(); return this.vnow(); }
+  pause() {
+    if (this.paused) return;
+    this.pv = this.vnow(); this.paused = true;
+    if (this.bus) { const b = this.bus, c = AE.ctx; b.gain.setTargetAtTime(0, c.currentTime, 0.03); setTimeout(() => b.disconnect(), 300); }
+    this.bus = null; this.syn = null;
   }
+  resume() {
+    if (!this.paused) return;
+    const c = AE.ctx; this.paused = false; this.vt0 = this.pv; this.t0 = c.currentTime;
+    this.i = DEMO_EVENTS.findIndex((e) => e.t >= this.pv); if (this.i < 0) this.i = DEMO_EVENTS.length;
+    this.bus = c.createGain(); this.bus.connect(AE.music); this.syn = makeDemoSynth(c, this.bus, AE.noise);
+    this.pump();
+  }
+  stop() { clearInterval(this.timer); this.timer = null; this.pause(); }
   get ended() { return this.time() >= this.duration; }
 }
 class TapClock {
-  constructor() { this.duration = 0; }
+  constructor() { this.duration = 0; this.canWait = false; } // the video plays in another tab, so it can't be paused from here
   start(preroll) { this.t0 = performance.now() + preroll * 1000; this.pausedAt = null; }
   time() { return ((this.pausedAt ?? performance.now()) - this.t0) / 1000; }
   pause() { this.pausedAt = performance.now(); }
@@ -775,13 +806,13 @@ class TapClock {
   get ended() { return false; }
 }
 class YTClock {
-  constructor(p) { this.p = p; this.t = 0; this.raw = 0; this.rawAt = performance.now(); this.phase = 'live'; this.pausedAt = null; }
+  constructor(p, rate = 1) { this.p = p; this.rate = rate; this.t = 0; this.raw = 0; this.rawAt = performance.now(); this.phase = 'live'; this.pausedAt = null; this.canWait = true; }
   get duration() { try { return this.p.getDuration() || 0; } catch (e) { return 0; } }
   st() { try { return this.p.getPlayerState(); } catch (e) { return -1; } }
   // lead: seconds to hold the video at 0:00 so the first words have time to fall
   start(lead) {
     const p = this.p; this.lead = Math.max(0, lead || 0); this.t = -this.lead; this.seeking = true;
-    try { p.setVolume(Math.round(settings.music * 100)); p.seekTo(0, true); } catch (e) {}
+    try { p.setVolume(Math.round(settings.music * 100)); p.setPlaybackRate(this.rate); p.seekTo(0, true); } catch (e) {}
     if (this.lead > 0) {
       // play muted straight from the Start tap (that unlocks playback on phones), then pause for the countdown
       try { p.mute(); } catch (e) {}
@@ -794,12 +825,12 @@ class YTClock {
     if (this.phase === 'arming') {
       if (this.st() === 1 || now - this.armAt > 5000) {
         try { this.p.pauseVideo(); this.p.seekTo(0, true); this.p.unMute(); } catch (e) {}
-        this.phase = 'lead'; this.leadEnd = now + this.lead * 1000;
+        this.phase = 'lead'; this.leadEnd = now + (this.lead / this.rate) * 1000;
       }
       return -this.lead;
     }
     if (this.phase === 'lead') {
-      const r = (this.leadEnd - (this.pausedAt ?? now)) / 1000;
+      const r = ((this.leadEnd - (this.pausedAt ?? now)) / 1000) * this.rate;
       if (r > 0) return -r;
       try { this.p.playVideo(); } catch (e) {}
       this.phase = 'live'; this.t = 0;
@@ -811,7 +842,7 @@ class YTClock {
     const playing = this.st() === 1;
     if (raw !== this.raw) { this.raw = raw; this.rawAt = now; }
     // the player reports a fresh time every frame; only bridge short gaps, so a stall or an ad makes the game wait
-    let est = this.raw + (playing ? Math.min((now - this.rawAt) / 1000, 0.25) : 0);
+    let est = this.raw + (playing ? Math.min((now - this.rawAt) / 1000, 0.25) * this.rate : 0);
     if (playing && est < this.t && this.t - est < 0.12) est = this.t; // no tiny backward steps
     this.t = est;
     return est;
@@ -1018,9 +1049,10 @@ const G = {
   spawnIdx: 0, singIdx: 0, score: 0, shownScore: 0, combo: 0, maxCombo: 0, shield: 100, hits: 0, missed: 0, total: 0,
   duds: 0, onBeat: 0, keysOk: 0, keysBad: 0, errKeys: {}, hitChars: 0, firstT: 0, lastT: 0,
   shake: 0, flash: 0, flashColor: '255,176,46', pulse: 0, recoil: 0, muzzle: 0, baseHit: 0, aim: -Math.PI / 2,
-  lock: null, typed: '', cursorX: 0, clock: null, diff: DIFFS.easy, lastCount: 99, endAt: 0, attractNext: 0, failed: false,
+  lock: null, typed: '', clock: null, diff: DIFFS.easy, lastCount: 99, endAt: 0, attractNext: 0, failed: false,
+  blocks: [], liveBlocks: [], lastBlock: null, holding: false, holds: 0, holdTime: 0, waitMode: false,
 };
-const L = { W: 0, H: 0, dpr: 1, stripY: 26, topY: 70, hitY: 0, baseY: 0, tx: 0, ty: 0, fs: 22, cw: 13 };
+const L = { W: 0, H: 0, dpr: 1, topY: 70, hitY: 0, baseY: 0, tx: 0, ty: 0, fs: 22, cw: 13 };
 
 function setState(s) {
   G.state = s; app.dataset.state = s;
@@ -1071,55 +1103,72 @@ function selectTargets(lines, d) {
   return out.sort((a, b) => a.t - b.t);
 }
 
+// One block per lyric line: its words fall together as a row (wrapping on narrow screens) and reach
+// the stave line as the singer finishes the line. "Key words" keeps the rest of the line as faint context.
+function buildBlocks(lines, d) {
+  const keyOnly = settings.words === 'key';
+  if (keyOnly) selectTargets(lines, d);
+  return lines.map((l, li) => {
+    const words = l.words.map((w) => { const n = norm(w.text, d.norm); return { text: w.text, norm: n, t: w.t, target: n.length > 0 && (!keyOnly || !!w.target), line: li }; });
+    const end = Math.max(...l.words.map((w) => w.t)) + 0.35;
+    return { li, words, end, spawn: end - d.fall, fall: d.fall, yOff: 0, cx: 0.5 };
+  }).filter((b) => b.words.some((w) => w.target)).sort((a, b) => a.spawn - b.spawn);
+}
+
 function resetRun() {
   Object.assign(G, {
     active: [], shots: [], parts: [], rings: [], pops: [], spawnIdx: 0, singIdx: 0, score: 0, shownScore: 0, combo: 0, maxCombo: 0,
     shield: 100, hits: 0, missed: 0, total: 0, duds: 0, onBeat: 0, keysOk: 0, keysBad: 0, errKeys: {}, hitChars: 0,
-    shake: 0, flash: 0, pulse: 0, recoil: 0, muzzle: 0, baseHit: 0, lock: null, typed: '', cursorX: 0, lastCount: 99, endAt: 0, failed: false,
+    shake: 0, flash: 0, pulse: 0, recoil: 0, muzzle: 0, baseHit: 0, lock: null, typed: '', lastCount: 99, endAt: 0, failed: false,
+    blocks: [], liveBlocks: [], lastBlock: null, holding: false, holds: 0, holdTime: 0, typeStart: null, pausedTotal: 0, pauseAt: null, endReal: null,
   });
   typeIn.value = ''; G.prevTyped = ''; updateLockUI();
 }
 
 function startGame() {
   const ac = AE.ensure();
-  AE.userPaused = false;
   const d = DIFFS[settings.diff];
   const lines = songData();
-  const targets = selectTargets(lines, d);
-  if (!targets.length) {
+  const blocks = buildBlocks(lines, d);
+  if (!blocks.length) {
     setStatus('bad', 'There are no lyrics to play yet. Paste lyrics or a transcript under <strong>Lyrics &amp; timing</strong>.');
     ui.lyricsBox.open = true; return;
   }
   if (!ac && source.kind !== 'youtube') { setStatus('bad', 'This browser has no Web Audio, so the demo and audio files can’t play. Try a YouTube link.'); return; }
   if (G.clock) G.clock.stop();
   resetRun();
-  G.diff = d; G.lines = lines; G.targets = targets; G.total = 0;
+  G.diff = d; G.lines = lines; G.blocks = blocks; G.total = 0;
+  G.targets = blocks.flatMap((b) => b.words.filter((w) => w.target));
   G.allWords = lines.flatMap((l) => l.words).sort((a, b) => a.t - b.t);
-  G.firstT = targets[0].t; G.lastT = targets[targets.length - 1].t;
-  G.songKey = (source.kind === 'youtube' ? 'yt:' + source.id : source.kind === 'file' ? 'file:' + source.title : 'demo') + ':' + settings.diff;
+  G.firstSpawn = blocks[0].spawn; G.lastT = blocks[blocks.length - 1].end;
+  G.songKey = (source.kind === 'youtube' ? 'yt:' + source.id : source.kind === 'file' ? 'file:' + source.title : 'demo') + ':' + settings.diff + ':' + settings.words;
   // keyboard first: focus must happen inside the gesture for phones
   setState('play');
   typeIn.focus({ preventScroll: true });
-  const preroll = Math.min(8, Math.max(3, d.fall - G.firstT + 0.8));
+  const lead = 0.8 - G.firstSpawn;
+  const rate = settings.speed || 1;
   if (source.kind === 'demo') {
-    G.clock = new SeqClock(); G.clock.start(preroll);
+    G.clock = new SeqClock(rate); G.clock.start(clamp(lead, 3, 10));
   } else if (source.kind === 'file') {
-    G.clock = new BufferClock(source.buffer); G.clock.start(preroll);
+    G.clock = new BufferClock(source.buffer); G.clock.start(clamp(lead, 3, 10));
+    if (rate !== 1) showToast('Song speed works with YouTube and the demo only.');
   } else if (source.embedOk && ytPlayer) {
-    G.clock = new YTClock(ytPlayer); G.clock.start(Math.max(0, d.fall - G.firstT + 0.8));
+    G.clock = new YTClock(ytPlayer, rate); G.clock.start(Math.max(0, lead));
   } else {
     G.clock = new TapClock(); G.clock.start(3.5);
     $('#tapOff').textContent = fmtOff(settings.offset);
   }
-  // skip anything that would already be past the baseline
+  G.waitMode = d.wait && G.clock.canWait;
+  if (d.wait && !G.clock.canWait) showToast('Tap sync can’t pause the video, so the song won’t wait.');
+  // skip lines that are already over
   const t0 = G.clock.time();
-  while (G.spawnIdx < targets.length && targets[G.spawnIdx].t < t0 - 0.2) G.spawnIdx++;
+  while (G.spawnIdx < blocks.length && blocks[G.spawnIdx].end < t0 - 0.5) G.spawnIdx++;
   while (G.singIdx < G.allWords.length && G.allWords[G.singIdx].t < t0) G.singIdx++;
 }
 
 function pauseGame() {
   if (G.state !== 'play') return;
-  G.clock && G.clock.pause();
+  G.clock && G.clock.pause(); G.pauseAt = performance.now();
   setState('paused'); $('#pOff').textContent = fmtOff(settings.offset);
   $('#pauseHint').textContent = source.kind === 'youtube' && !source.embedOk
     ? 'Pause the video in the other tab too. Words late for the singer? Press −. Early? Press +.'
@@ -1127,7 +1176,8 @@ function pauseGame() {
 }
 function resumeGame() {
   if (G.state !== 'paused') return;
-  AE.ensure(); G.clock && G.clock.resume();
+  AE.ensure(); if (G.clock && !G.holding) G.clock.resume();
+  if (G.pauseAt != null) { G.pausedTotal += performance.now() - G.pauseAt; G.pauseAt = null; }
   setState('play'); typeIn.focus({ preventScroll: true });
 }
 function quitToMenu() {
@@ -1139,27 +1189,23 @@ function nudgeOffset(delta) {
   const out = fmtOff(settings.offset);
   $('#offIn').value = clamp(settings.offset, -3, 3); $('#offOut').textContent = out; $('#pOff').textContent = out; $('#tapOff').textContent = out;
   if (G.state === 'play' || G.state === 'paused') {
-    G.targets.forEach((w) => { w.t += delta; }); G.active.forEach((w) => { w.t += delta; w.spawn += delta; });
+    G.blocks.forEach((b) => { b.spawn += delta; b.end += delta; b.words.forEach((w) => { w.t += delta; }); });
     G.lines.forEach((l) => { l.t += delta; l.words.forEach((w) => { w.t += delta; }); });
-    G.firstT += delta; G.lastT += delta;
+    G.firstSpawn += delta; G.lastT += delta;
     showToast('Lyric timing ' + out);
   }
 }
 
 /* ---------------- typing ---------------- */
-function candidates(n) {
-  let best = null, bestP = -1e9;
-  for (const w of G.active) {
-    if (w.dying || w.dead) continue;
-    if (w.norm.startsWith(n)) { const p = G.now - w.spawn; if (p > bestP) { bestP = p; best = w; } }
-  }
+// the word to aim at: lowest on screen first, then leftmost, so a row reads like a sentence
+function rank(w) { const p = wordPos(w); return p.y - p.x * 1e-3; }
+function pick(test) {
+  let best = null, bestR = -1e9;
+  for (const w of G.active) { if (w.dying || w.dead || !test(w)) continue; const r = rank(w); if (r > bestR) { bestR = r; best = w; } }
   return best;
 }
-function lowestAlive() {
-  let best = null, bestP = -1e9;
-  for (const w of G.active) { if (w.dying || w.dead) continue; const p = G.now - w.spawn; if (p > bestP) { bestP = p; best = w; } }
-  return best;
-}
+const candidates = (n) => pick((w) => w.norm.startsWith(n));
+const lowestAlive = () => pick(() => true);
 function updateLock() {
   const n = norm(G.typed, G.diff.norm);
   const prev = G.lock;
@@ -1216,11 +1262,7 @@ $('#fireBtn').addEventListener('pointerdown', (e) => e.preventDefault()); // kee
 function fire(text) {
   const n = norm(text, G.diff.norm);
   if (!n) return;
-  let target = null, bestP = -1e9;
-  for (const w of G.active) {
-    if (w.dying || w.dead || w.norm !== n) continue;
-    const p = G.now - w.spawn; if (p > bestP) { bestP = p; target = w; }
-  }
+  const target = pick((w) => w.norm === n);
   G.recoil = 1; G.muzzle = 1;
   if (!target) {
     G.duds++; breakCombo(); AE.dud();
@@ -1250,19 +1292,38 @@ function breakCombo() {
 }
 
 /* ---------------- entities & fx ---------------- */
-function wordPos(w) {
-  const p = (G.now - w.spawn) / w.fall;
-  return { x: w.fx * L.W, y: L.topY + (L.hitY - L.topY) * p, p };
+function layoutBlock(b) {
+  const gap = Math.max(10, L.cw * 0.8), rowH = L.fs + 22, maxW = L.W - 32;
+  const rows = []; let row = [], rw = 0;
+  for (const w of b.words) {
+    w.ww = w.text.length * L.cw + 24;
+    if (row.length && rw + gap + w.ww > maxW) { rows.push([row, rw]); row = []; rw = 0; }
+    rw += (row.length ? gap : 0) + w.ww; row.push(w);
+  }
+  if (row.length) rows.push([row, rw]);
+  rows.forEach(([ws, width], r) => {
+    let x = -width / 2;
+    for (const w of ws) { w.dx = x + w.ww / 2; w.dy = -(rows.length - 1 - r) * rowH; x += w.ww + gap; }
+  });
+  b.height = rows.length * rowH; b.W = L.W; b.fs = L.fs;
 }
-function spawnWord(tg, now) {
-  ctx.font = `700 ${L.fs}px ${MONO}`;
-  const ww = tg.text.length * L.cw + 24, margin = 16;
-  let x = G.cursorX;
-  if (x < margin || x + ww > L.W - margin) x = margin + rand(0, Math.min(60, L.W * 0.08));
-  if (ww > L.W - margin * 2) x = margin;
-  G.cursorX = x + ww + rand(12, 40);
-  G.active.push({ ...tg, spawn: tg.t - G.diff.fall, fall: G.diff.fall, fx: (x + ww / 2) / L.W, born: now });
-  G.total++;
+function wordPos(w) {
+  const b = w.block;
+  if (b.W !== L.W || b.fs !== L.fs) layoutBlock(b);
+  const p = (G.now - b.spawn) / b.fall;
+  return { x: b.cx * L.W + w.dx, y: L.topY + (L.hitY - L.topY) * p + b.yOff + w.dy, p };
+}
+function spawnBlock(b, now) {
+  layoutBlock(b);
+  const prev = G.lastBlock;
+  if (prev) {
+    // keep rows from overlapping when lines come quickly: push this one up if it would touch the one below
+    const speed = (L.hitY - L.topY) / b.fall;
+    b.yOff = Math.min(0, (b.spawn - prev.spawn) * speed + prev.yOff - prev.height - 6);
+  }
+  G.lastBlock = b; b.born = now; G.liveBlocks.push(b);
+  for (const w of b.words) { w.block = b; if (w.target) { G.active.push(w); G.total++; } }
+  if (G.typeStart == null) G.typeStart = performance.now();
 }
 function addPop(x, y, text, color, size, life = 0.9) { G.pops.push({ x, y, text, color, size, life, max: life }); }
 function explode(w, shot) {
@@ -1311,16 +1372,30 @@ function attractUpdate(now) {
   if (now > G.attractNext) {
     G.attractNext = now + rand(0.9, 1.5);
     const text = ATTRACT_WORDS[Math.floor(Math.random() * ATTRACT_WORDS.length)];
-    const ww = text.length * L.cw + 24;
-    const x = rand(16, Math.max(17, L.W - ww - 16));
-    G.active.push({ text, norm: text.toLowerCase(), t: now + 6, spawn: now, fall: 6, fx: (x + ww / 2) / L.W, born: now, auto: rand(0.5, 0.85), attract: true });
+    const half = (text.length * L.cw + 24) / 2 / L.W + 0.02;
+    const w = { text, norm: text.toLowerCase(), t: now + 6, target: true, auto: rand(0.5, 0.85) };
+    const b = { words: [w], spawn: now, end: now + 6, fall: 6, yOff: 0, cx: rand(Math.min(0.5, half), Math.max(0.5, 1 - half)), attract: true, born: now };
+    w.block = b; G.liveBlocks.push(b); G.active.push(w);
   }
   for (const w of G.active) {
-    if (!w.dying && !w.dead && (now - w.spawn) / w.fall > w.auto) {
-      w.dying = true; const p = wordPos(w); G.aim = Math.atan2(p.y - L.ty, p.x - L.tx); G.recoil = 1; G.muzzle = 1;
+    if (w.dying || w.dead) continue;
+    const p = wordPos(w);
+    if (p.p > w.auto) {
+      w.dying = true; G.aim = Math.atan2(p.y - L.ty, p.x - L.tx); G.recoil = 1; G.muzzle = 1;
       G.shots.push({ x: L.tx, y: L.ty - 30, target: w, judge: Math.random() < 0.4 ? 'beat' : 'clean', pts: 0, trail: [], speed: 2200, silent: true });
     }
   }
+}
+
+// Easy and Normal: when a word reaches the baseline the music stops and waits for the player.
+function startHold(w) {
+  G.holding = true; G.holdStart = performance.now(); G.holds++;
+  G.clock.pause(); breakCombo(); AE.tapeStop(); G.baseHit = 0.7;
+}
+function endHold() {
+  G.holding = false; G.holdTime += (performance.now() - G.holdStart) / 1000;
+  if (G.state === 'play') G.clock.resume();
+  AE.tapeStart(); addPop(L.W / 2, L.hitY - 40, 'GO', '94,230,196', 22, 0.7);
 }
 
 /* ---------------- update ---------------- */
@@ -1331,15 +1406,24 @@ function update(now, dt) {
       const c = Math.ceil(-now);
       if (c <= 3 && c !== G.lastCount) { G.lastCount = c; AE.count(false); }
     } else if (G.lastCount !== 0 && G.lastCount <= 3) { G.lastCount = 0; AE.count(true); if (G.clock instanceof TapClock) addPop(L.W / 2, L.H * 0.4, 'PRESS PLAY', '255,176,46', 30, 1.2); }
-    while (G.spawnIdx < G.targets.length && G.targets[G.spawnIdx].t - G.diff.fall <= now) spawnWord(G.targets[G.spawnIdx++], now);
+    while (G.spawnIdx < G.blocks.length && G.blocks[G.spawnIdx].spawn <= now) spawnBlock(G.blocks[G.spawnIdx++], now);
     while (G.singIdx < G.allWords.length && G.allWords[G.singIdx].t <= now) { G.singIdx++; G.pulse = Math.min(1, G.pulse + 0.55); }
-    for (const w of G.active) if (!w.dead && !w.dying && wordPos(w).y > L.baseY - L.fs * 0.5) missWord(w);
+    // waiting rows stop above the turret; without waiting, words fall all the way to the baseline
+    const limit = G.waitMode ? Math.min(lerp(L.hitY, L.baseY, 0.6), L.baseY - 64) : L.baseY - L.fs * 0.6;
+    const low = G.active.filter((w) => !w.dead && !w.dying && wordPos(w).y > limit);
+    if (G.waitMode) {
+      if (low.length && !G.holding) startHold(low[0]);
+      else if (!low.length && G.holding) endHold();
+      G.holdWord = low.length ? low.sort((a, b) => rank(b) - rank(a))[0] : null;
+    } else for (const w of low) missWord(w);
     if (G.state !== 'play') return;
-    const done = G.spawnIdx >= G.targets.length && !G.active.some((w) => !w.dead) && !G.shots.length;
+    const done = G.spawnIdx >= G.blocks.length && !G.active.some((w) => !w.dead) && !G.shots.length;
     if (done && !G.endAt) G.endAt = now + 1.6;
     if ((G.endAt && now > G.endAt) || (G.clock && G.clock.ended && now > 1)) finish(false);
   } else if (G.state === 'menu') attractUpdate(now);
-  G.active = G.active.filter((w) => !w.dead && !(w.attract && wordPos(w).y > L.baseY));
+  if (G.state === 'menu') for (const w of G.active) if (!w.dead && wordPos(w).y > L.baseY) w.dead = true;
+  G.active = G.active.filter((w) => !w.dead);
+  G.liveBlocks = G.liveBlocks.filter((b) => b.words.some((w) => w.target && !w.dead));
 
   for (const s of G.shots) {
     s.trail.push({ x: s.x, y: s.y }); if (s.trail.length > 10) s.trail.shift();
@@ -1382,14 +1466,10 @@ function layout() {
   const r = stage.getBoundingClientRect();
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const W = Math.max(1, Math.round(r.width)), H = Math.max(1, Math.round(r.height));
-  if (W !== L.W || H !== L.H || dpr !== L.dpr) {
-    cv.width = W * dpr; cv.height = H * dpr; L.W = W; L.H = H; L.dpr = dpr;
-    if (G.cursorX > W) G.cursorX = 0;
-  }
+  if (W !== L.W || H !== L.H || dpr !== L.dpr) { cv.width = W * dpr; cv.height = H * dpr; L.W = W; L.H = H; L.dpr = dpr; }
   L.fs = Math.round(clamp(W / 24, 17, 28));
   ctx.font = `700 ${L.fs}px ${MONO}`; L.cw = ctx.measureText('M').width;
   const tapShown = !$('#tapChip').hidden;
-  L.stripY = (W < 640 && tapShown) ? 58 : 26;
   L.video = !ytWrapEl.hidden && G.state !== 'menu';
   if (L.vidW !== W || L.vidH !== H) {
     // cover the stage with a 16:9 frame, a little oversized so the player chrome sits off-screen
@@ -1397,10 +1477,9 @@ function layout() {
     const vw = Math.max(W, H * 16 / 9) * 1.08, vh = Math.max(H, W * 9 / 16) * 1.08;
     ytWrapEl.style.setProperty('--vw', Math.round(vw) + 'px'); ytWrapEl.style.setProperty('--vh', Math.round(vh) + 'px');
   }
-  const stripSize = Math.round(clamp(W / 42, 14, 20));
-  L.topY = L.stripY + stripSize * 1.75 + L.fs * 0.5 + 18;
+  L.topY = (W < 640 && tapShown ? 58 : 14) + L.fs;
   L.baseY = H - Math.max(26, H * 0.05);
-  L.hitY = lerp(L.topY, L.baseY, H < 420 ? 0.72 : 0.8);
+  L.hitY = lerp(L.topY, L.baseY, 0.72);
   L.tx = W / 2; L.ty = L.baseY - 8;
 }
 
@@ -1447,30 +1526,31 @@ function draw(now) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
   ctx.setLineDash([]);
-  if (G.state !== 'menu') {
-    ctx.font = `700 10px ${UI}`; ctx.fillStyle = 'rgba(94,230,196,0.7)'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-    ctx.fillText('BEAT LINE', 12, L.hitY - gap * 2 - 4);
-  }
-
-  // karaoke strip
-  if (G.state !== 'menu' && G.lines.length) drawStrip(now);
-
-  // words
+  // words: each lyric line is a row; context words (Key words mode) are faint text
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
   const fnt = `700 ${L.fs}px ${MONO}`;
-  for (const w of G.active) {
+  const ctxFnt = `600 ${Math.round(L.fs * 0.8)}px ${MONO}`;
+  for (const b of G.liveBlocks) for (const w of b.words) {
     if (w.dead) continue;
-    const { x, y, p } = wordPos(w);
+    const { x, y } = wordPos(w);
+    if (y < -40 || y > L.H + 40) continue;
+    const blockAlpha = clamp((now - b.born) / 0.3, 0, 1);
+    if (!w.target) {
+      ctx.globalAlpha = blockAlpha * 0.6; ctx.font = ctxFnt; ctx.textAlign = 'center';
+      ctx.fillStyle = now >= w.t ? '#f4efe3' : '#8f99bd'; ctx.fillText(w.text, x, y + 1); ctx.textAlign = 'left';
+      continue;
+    }
     const len = w.text.length, ww = len * L.cw, bx = x - ww / 2 - 12, bh = L.fs + 14, by = y - bh / 2;
-    const age = now - w.born, alpha = clamp(age / 0.25, 0, 1) * (w.dying ? 0.75 : 1);
-    const isLock = w === G.lock, inWin = !w.attract && Math.abs(now - w.t) <= G.diff.win;
-    const danger = p > 1;
+    const alpha = blockAlpha * (w.dying ? 0.75 : 1);
+    const isLock = w === G.lock, inWin = !b.attract && Math.abs(now - w.t) <= G.diff.win;
+    const sung = !b.attract && now > w.t + G.diff.win;
+    const danger = y > L.hitY + 6, held = G.holding && w === G.holdWord;
     ctx.globalAlpha = alpha;
     roundRect(bx, by, ww + 24, bh, 9);
     ctx.fillStyle = isLock ? 'rgba(40,30,10,0.92)' : 'rgba(10,16,36,0.82)'; ctx.fill();
     ctx.lineWidth = isLock ? 2 : 1;
-    ctx.strokeStyle = isLock ? '#ffb02e' : danger ? 'rgba(255,77,109,0.8)' : inWin ? 'rgba(94,230,196,0.9)' : 'rgba(196,206,255,0.2)';
-    if (isLock) { ctx.shadowColor = 'rgba(255,176,46,0.6)'; ctx.shadowBlur = 16; }
+    ctx.strokeStyle = isLock ? '#ffb02e' : held ? `rgba(255,176,46,${0.5 + 0.5 * Math.sin(performance.now() / 120)})` : danger ? 'rgba(255,77,109,0.8)' : inWin ? 'rgba(94,230,196,0.9)' : 'rgba(196,206,255,0.2)';
+    if (isLock || held) { ctx.shadowColor = 'rgba(255,176,46,0.6)'; ctx.shadowBlur = 16; }
     ctx.stroke(); ctx.shadowBlur = 0;
     ctx.font = fnt;
     const used = isLock ? consumed(w.text, norm(G.typed, G.diff.norm).length, G.diff.norm) : 0;
@@ -1480,7 +1560,7 @@ function draw(now) {
       ctx.fillText(w.text[i], sx + i * L.cw, y + 1);
     }
     if (isLock && used < len) { ctx.fillStyle = '#ffb02e'; ctx.fillRect(sx + used * L.cw, y + L.fs * 0.55, L.cw - 2, 3); }
-    if (inWin) { ctx.fillStyle = 'rgba(94,230,196,0.9)'; ctx.fillRect(bx + 8, by + bh - 3, ww + 8, 2); }
+    if (inWin || sung) { ctx.fillStyle = inWin ? 'rgba(94,230,196,0.9)' : 'rgba(94,230,196,0.35)'; ctx.fillRect(bx + 8, by + bh - 3, ww + 8, 2); }
   }
   ctx.globalAlpha = 1;
 
@@ -1540,42 +1620,17 @@ function draw(now) {
       ctx.fillText(String(c), W / 2, H * 0.42);
       ctx.globalAlpha = 1;
       if (G.clock instanceof TapClock) { ctx.font = `700 15px ${UI}`; ctx.fillStyle = '#cfd4e8'; ctx.fillText('Press play on YouTube at zero', W / 2, H * 0.42 + Math.min(W, H) * 0.16); }
-    } else if (G.spawnIdx === 0 && G.active.length === 0 && G.targets.length) {
-      const wait = G.targets[0].t - G.diff.fall - now;
+    } else if (G.spawnIdx === 0 && G.blocks.length) {
+      const wait = G.blocks[0].spawn - now;
       if (wait > 0.3) {
         ctx.font = `800 ${Math.round(clamp(W / 22, 16, 26))}px ${DISP}`; ctx.fillStyle = 'rgba(244,239,227,0.85)';
         ctx.fillText('GET READY', W / 2, H * 0.4);
-        ctx.font = `600 14px ${UI}`; ctx.fillStyle = '#8f99bd'; ctx.fillText(`First word in ${Math.ceil(wait)}s`, W / 2, H * 0.4 + 30);
+        ctx.font = `600 14px ${UI}`; ctx.fillStyle = '#8f99bd'; ctx.fillText(`First line in ${Math.ceil(wait)}s`, W / 2, H * 0.4 + 30);
       }
     }
+
   }
   if (G.flash > 0.01) { ctx.fillStyle = `rgba(${G.flashColor},${G.flash})`; ctx.fillRect(0, 0, W, H); }
-}
-
-function drawStrip(now) {
-  let li = -1;
-  for (let i = 0; i < G.lines.length; i++) { if (G.lines[i].t <= now + 0.4) li = i; else break; }
-  const W = L.W;
-  const maxW = W < 640 ? W - 32 : W - 2 * 250;
-  const cur = li >= 0 ? G.lines[li] : null, next = G.lines[li + 1];
-  const drawLine = (line, y, size, bright) => {
-    let fs = size; ctx.font = `700 ${fs}px ${UI}`;
-    let total = ctx.measureText(line.words.map((w) => w.text).join(' ')).width;
-    if (total > maxW) { fs = Math.max(11, Math.floor(fs * maxW / total)); ctx.font = `700 ${fs}px ${UI}`; total = ctx.measureText(line.words.map((w) => w.text).join(' ')).width; }
-    let x = W / 2 - total / 2; const sp = ctx.measureText(' ').width;
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    for (const w of line.words) {
-      const ww = ctx.measureText(w.text).width;
-      const sung = bright && w.t <= now;
-      ctx.fillStyle = !bright ? 'rgba(143,153,189,0.55)' : sung ? '#f4efe3' : 'rgba(143,153,189,0.9)';
-      ctx.fillText(w.text, x, y);
-      if (w.target && bright) { ctx.fillStyle = sung ? 'rgba(255,176,46,0.9)' : 'rgba(255,176,46,0.4)'; ctx.fillRect(x, y + fs * 0.62, ww, 2); }
-      x += ww + sp;
-    }
-  };
-  const size = Math.round(clamp(W / 42, 14, 20));
-  if (cur) { drawLine(cur, L.stripY, size, true); if (next) drawLine(next, L.stripY + size + 6, Math.round(size * 0.72), false); }
-  else if (next) drawLine(next, L.stripY, size, false);
 }
 
 function drawBaseline() {
@@ -1590,7 +1645,13 @@ function drawBaseline() {
   ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   if (G.state !== 'menu') {
     ctx.font = `700 10px ${UI}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = `rgba(${col},0.8)`;
-    ctx.fillText(`BASELINE ${Math.round(G.shield)}%`, 12, y + 6);
+    if (G.waitMode) {
+      // the bottom band says when the song is waiting, clear of the falling rows
+      if (G.holding && G.holdWord) {
+        ctx.font = `800 11px ${UI}`; ctx.fillStyle = `rgba(255,176,46,${0.75 + 0.25 * Math.sin(performance.now() / 150)})`;
+        ctx.fillText(`SONG WAITING · TYPE “${G.holdWord.text.toUpperCase()}”`, 12, y + 6);
+      }
+    } else ctx.fillText(`BASELINE ${Math.round(G.shield)}%`, 12, y + 6);
   }
 }
 
@@ -1618,8 +1679,10 @@ function drawTurret() {
 /* ---------------- HUD ---------------- */
 const hudCache = {};
 function setText(el, key, v) { if (hudCache[key] !== v) { hudCache[key] = v; el.textContent = v; } }
-function liveWpm(now) {
-  const mins = (now - (G.firstT - G.diff.fall)) / 60;
+function liveWpm() {
+  if (G.typeStart == null) return null;
+  const end = G.endReal || (G.pauseAt ?? performance.now());
+  const mins = (end - G.typeStart - G.pausedTotal) / 60000;
   return mins > 0.08 ? Math.round(G.hitChars / 5 / mins) : null;
 }
 function hud(now) {
@@ -1627,14 +1690,18 @@ function hud(now) {
   setText(ui.score, 's', Math.round(G.shownScore).toLocaleString());
   const mult = Math.min(4, 1 + Math.floor(G.combo / 10) * 0.5);
   setText(ui.combo, 'c', G.combo + (mult > 1 ? ' ×' + mult : ''));
-  const w = liveWpm(now); setText(ui.wpm, 'w', w == null ? '–' : String(w));
+  const w = liveWpm(); setText(ui.wpm, 'w', w == null ? '–' : String(w));
   const k = G.keysOk + G.keysBad; setText(ui.acc, 'a', k ? Math.round((G.keysOk / k) * 100) + '%' : '–');
   const s = Math.round(G.shield);
   if (hudCache.sh !== s) {
     hudCache.sh = s; ui.shield.style.width = s + '%';
     ui.shield.style.background = s > 50 ? 'var(--mint)' : s > 25 ? 'var(--ember)' : 'var(--rose)';
   }
-  setText(ui.shieldK, 'sk', G.diff.fail || L.W < 560 ? 'Baseline' : 'Baseline · no fail');
+  $('#hShieldBar').hidden = G.waitMode; $('#hWaits').hidden = !G.waitMode;
+  if (G.waitMode) { setText(ui.shieldK, 'sk', 'Waited'); setText($('#hWaits'), 'wt', G.holds + '×'); }
+  const ph = G.holding && G.holdWord ? `The song is waiting: type “${G.holdWord.text}”` : 'Type the falling word…';
+  if (hudCache.ph !== ph) { hudCache.ph = ph; typeIn.placeholder = ph; field.classList.toggle('wait', G.holding); }
+  else setText(ui.shieldK, 'sk', G.diff.fail || L.W < 560 ? 'Baseline' : 'Baseline · no fail');
   const end = (G.clock && G.clock.duration) || (G.lastT + 2);
   ui.prog.style.width = clamp(now / end, 0, 1) * 100 + '%';
 }
@@ -1649,9 +1716,15 @@ function finish(failed) {
   const k = G.keysOk + G.keysBad, acc = k ? G.keysOk / k : 0;
   const total = Math.max(1, G.total + (failed ? G.targets.length - G.spawnIdx : 0));
   const rate = G.hits / total;
-  const wpm = liveWpm(now) || 0;
+  G.endReal = performance.now();
+  const wpm = liveWpm() || 0;
   let grade = 'D';
-  if (!failed) {
+  if (G.waitMode) {
+    // nothing can be missed when the song waits, so grade accuracy and how often it had to wait
+    const span = Math.max(1, (G.endReal - G.typeStart - G.pausedTotal) / 1000);
+    const flow = 1 - Math.min(1, G.holdTime / span);
+    grade = acc >= 0.96 && flow >= 0.9 ? 'S' : acc >= 0.92 && flow >= 0.75 ? 'A' : acc >= 0.85 && flow >= 0.5 ? 'B' : acc >= 0.7 ? 'C' : 'D';
+  } else if (!failed) {
     if (rate >= 0.97 && acc >= 0.96) grade = 'S';
     else if (rate >= 0.88 && acc >= 0.92) grade = 'A';
     else if (rate >= 0.72 && acc >= 0.85) grade = 'B';
@@ -1659,7 +1732,7 @@ function finish(failed) {
   }
   $('#rGrade').textContent = grade; $('#rGrade').dataset.g = grade;
   $('#rTitle').textContent = source.title;
-  $('#rSub').textContent = `${G.diff.name} · ${failed ? 'the baseline broke' : 'song cleared'}`;
+  $('#rSub').textContent = `${G.diff.name} · ` + (failed ? 'the baseline broke' : G.waitMode ? (G.holds ? `the song waited ${G.holds}× (${Math.round(G.holdTime)}s)` : 'the song never had to wait') : 'song cleared');
   $('#rScore').textContent = G.score.toLocaleString();
   $('#rWpm').textContent = wpm;
   $('#rAcc').textContent = k ? Math.round(acc * 100) + '%' : '–';
@@ -1706,13 +1779,24 @@ function renderDiffs() {
   Object.entries(DIFFS).forEach(([k, d]) => {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'diff'; b.setAttribute('role', 'radio');
     b.setAttribute('aria-checked', String(settings.diff === k)); b.id = 'diff-' + k;
-    b.innerHTML = `<b>${d.name}</b><small>${d.wpm > 200 ? 'every word' : '~' + d.wpm + ' WPM'} · ${d.fall}s fall</small>`;
+    b.innerHTML = `<b>${d.name}</b><small>${d.tag}</small>`;
     b.addEventListener('click', () => { AE.ensure(); AE.click(); settings.diff = k; saveSettings(); renderDiffs(); refreshStart(); });
     box.appendChild(b);
   });
   $('#diffDesc').textContent = DIFFS[settings.diff].desc;
 }
 renderDiffs();
+function renderSeg(boxId, options, key) {
+  const box = $(boxId); box.innerHTML = '';
+  options.forEach(([v, label]) => {
+    const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'radio'); b.textContent = label;
+    b.setAttribute('aria-checked', String(settings[key] === v));
+    b.addEventListener('click', () => { AE.ensure(); AE.click(); settings[key] = v; saveSettings(); renderSeg(boxId, options, key); });
+    box.appendChild(b);
+  });
+}
+renderSeg('#segWords', WORD_MODES, 'words');
+renderSeg('#segSpeed', SPEEDS, 'speed');
 $('#optSpace').checked = settings.spaceFires; $('#optGhost').checked = settings.ghost;
 $('#optSfx').value = settings.sfx; $('#optMusic').value = settings.music; $('#optDim').value = settings.dim;
 $('#optDim').addEventListener('input', (e) => { settings.dim = +e.target.value; saveSettings(); });

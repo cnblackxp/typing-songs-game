@@ -17,14 +17,27 @@ A rhythm typing trainer. Lyrics fall in time with a song. Type the falling word 
 
 The lyrics box accepts LRC, SRT/VTT, a transcript copied from YouTube (… → Show transcript), or plain lines with no times. Plain lines fall at a steady pace.
 
+## How a song plays
+
+Each lyric line falls as a row of words and reaches the stave line as the singer finishes it. Type the words in any order; Space or Enter fires the typed word. Firing a word while it's being sung scores an on-beat bonus.
+
+On **Easy** and **Normal** the song waits for you: if a word gets too low, the music (YouTube video, audio file or demo) pauses until you clear it, so every line can be typed at your own pace. **Hard** and **Expert** never wait: words that reach the baseline damage it, and a broken baseline ends the run.
+
+Options on the menu:
+
+- **Words**: *All lyrics* (default) or *Key words*, which drops only some words at the difficulty's pace and shows the rest of the line as faint text.
+- **Song speed**: 100%, 75% or 50% for YouTube and the demo. Everything slows down together, so the timing still lines up.
+
 ## Difficulty
 
-| | Target pace | Fall time | Matching | Fail |
+| | Fall time | The song waits | Matching | Fail |
 | --- | --- | --- | --- | --- |
-| Easy (default) | ~30 WPM, words under 3 letters skipped | 5.8 s | case and punctuation ignored | no |
-| Normal | ~45 WPM | 4.5 s | case and punctuation ignored | no |
-| Hard | ~66 WPM, every word | 3.5 s | apostrophes count | yes |
-| Expert | every sung word | 2.8 s | exact case, apostrophes, hyphens | yes |
+| Easy (default) | 8 s | yes | capitals and punctuation ignored | no |
+| Normal | 6 s | yes | capitals and punctuation ignored | no |
+| Hard | 4.5 s | no | apostrophes count | yes |
+| Expert | 3.2 s | no | exact capitals, apostrophes, hyphens | yes |
+
+Tap sync (when a video can't be embedded) can't pause the other tab, so the song never waits there.
 
 ## Controls
 
