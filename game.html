@@ -803,6 +803,11 @@ const ui = {
   toast: $('#toast'),
 };
 
+/* ---------------- hosted full version ---------------- */
+// The claude.ai viewer blocks YouTube and outside requests; the same page hosted on GitHub Pages has neither limit.
+const FULL_URL = 'https://cnblackxp.github.io/typing-songs-game/';
+const ON_FULL_SITE = location.href.startsWith(FULL_URL);
+
 /* ---------------- source state ---------------- */
 let source = { kind: 'demo', title: DEMO.title, artist: DEMO.artist, id: 'demo' };
 let ytPlayer = null, loadToken = 0;
@@ -961,7 +966,10 @@ async function loadYouTube(url) {
   if (pr.p) msg = `<strong>${t}</strong> is ready. ` + msg;
   else {
     tone = 'warn';
-    msg = `This viewer can’t play YouTube inside the page, so the game uses <strong>tap sync</strong>: ${link} in another tab, press Start, and press play there when the countdown hits zero. ` + msg;
+    const full = ON_FULL_SITE ? '' : `<a href="${FULL_URL}?v=${esc(id)}" target="_blank" rel="noopener"><strong>Play it in the full version ↗</strong></a> to get the video and lyrics inside the game. Or stay here with `;
+    msg = full
+      ? full + `<strong>tap sync</strong>: ${link} in another tab, press Start, and press play there when the countdown hits zero. ` + msg
+      : `This video can’t play inside the game, so it uses <strong>tap sync</strong>: ${link} in another tab, press Start, and press play there when the countdown hits zero. ` + msg;
   }
   setStatus(tone, msg);
   refreshStart();
@@ -1730,6 +1738,12 @@ fitViewport();
 window.__lyricVolley = { G, AE, DIFFS, parseLyrics, buildLines, selectTargets, norm, splitTitle, parseYouTubeId, settings };
 
 refreshStart();
+// a shared link like ?v=VIDEO_ID (or ?yt=full-url) loads that song straight away
+try {
+  const qp = new URLSearchParams(location.search);
+  const v = qp.get('v') || qp.get('yt');
+  if (v && parseYouTubeId(v)) { $('#ytUrl').value = v.length === 11 ? 'https://www.youtube.com/watch?v=' + v : v; loadYouTube($('#ytUrl').value); }
+} catch (e) { /* no query string here */ }
 if (document.fonts && document.fonts.load) Promise.all([document.fonts.load(`700 20px ${MONO}`), document.fonts.load(`800 20px ${DISP}`), document.fonts.load(`700 16px ${UI}`)]).catch(() => {});
 requestAnimationFrame(frame);
 })();
