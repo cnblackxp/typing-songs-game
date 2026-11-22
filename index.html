@@ -1593,7 +1593,7 @@ function hud(now) {
     hudCache.sh = s; ui.shield.style.width = s + '%';
     ui.shield.style.background = s > 50 ? 'var(--mint)' : s > 25 ? 'var(--ember)' : 'var(--rose)';
   }
-  setText(ui.shieldK, 'sk', G.diff.fail ? 'Baseline' : 'Baseline · no fail');
+  setText(ui.shieldK, 'sk', G.diff.fail || L.W < 560 ? 'Baseline' : 'Baseline · no fail');
   const end = (G.clock && G.clock.duration) || (G.lastT + 2);
   ui.prog.style.width = clamp(now / end, 0, 1) * 100 + '%';
 }
